@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MeoDogHub - Tạo key</title>
+<style>
+*{box-sizing:border-box}[hidden]{display:none!important}
+body{margin:0;padding:16px;background:radial-gradient(circle at 50% 0,#2a1d55,#0f0f1a 55%) fixed;color:#e8e8f4;font:15px/1.4 system-ui,sans-serif;max-width:560px;margin-inline:auto}
+h1{font-size:20px;margin:4px 0 14px}h2{font-size:15px;margin:0 0 10px}
+.card{background:#191927;border:1px solid #2a2a40;border-radius:14px;padding:14px;margin-bottom:14px}
+label{display:block;font-size:12px;color:#8a8aa8;margin-bottom:10px}
+input,textarea{width:100%;margin-top:4px;padding:10px;border-radius:10px;border:1px solid #2a2a40;background:#11111c;color:#e8e8f4;font:14px ui-monospace,Menlo,monospace}
+.grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.chk{display:flex;align-items:center;gap:8px;color:#e8e8f4;font:14px system-ui}.chk input{width:auto;margin:0}
+button{padding:11px 14px;border:0;border-radius:10px;background:#7c5aff;color:#fff;font-weight:700;font-size:15px;width:100%}
+button.sm{width:auto;padding:7px 11px;font-size:12px;background:#2c2c44;margin-right:6px}
+.key{font:700 14px ui-monospace,Menlo,monospace;background:#11111c;border:1px solid #2a2a40;border-radius:8px;padding:9px;margin-top:6px;word-break:break-all}
+textarea{height:130px;resize:vertical}#msg{font-size:13px;min-height:18px;margin-top:8px}.ok{color:#4cd387}.err{color:#ff6b6b}
+</style></head><body>
+<h1>🔑 MeoDogHub - Tạo key</h1>
+
+<section class="card">
+  <div class="grid">
+    <label>Số key<input id="count" type="number" min="1" max="50" value="1"></label>
+    <label>Hạn (giờ)<input id="hours" type="number" min="0" value="24"></label>
+    <label>Tiền tố<input id="prefix" value="MeoDogHub"></label>
+  </div>
+  <label>Hạn 0 = vĩnh viễn · Webhook Discord (lưu trong trình duyệt của bạn)
+    <input id="hook" placeholder="https://discord.com/api/webhooks/..."></label>
+  <label>Ghi chú<input id="note" placeholder="vd: khách A" maxlength="100"></label>
+  <label class="chk"><input id="send" type="checkbox" checked> Gửi key vào kênh webhook</label>
+  <button id="go">Tạo key</button>
+  <label class="chk" style="margin-top:12px"><input id="auto" type="checkbox"> Tự tạo + gửi mỗi
+    <input id="every" type="number" min="1" value="24" style="width:70px;margin:0"> giờ (giữ tab mở)</label>
+  <div id="msg"></div>
+</section>
+
+<section class="card" id="res" hidden>
+  <h2>Key vừa tạo (chạm để copy)</h2><div id="keys"></div>
+</section>
+
+<section class="card">
+  <h2>Dán vào <code>Keys = { ... }</code> trong script Lua</h2>
+  <textarea id="lua" readonly placeholder="Chưa có key còn hạn"></textarea>
+  <div style="margin-top:8px"><button class="sm" id="copyLua">Copy dòng Lua</button><button class="sm" id="clear">Xoá lịch sử</button></div>
+</section>
+
+<script>
+const $=s=>document.querySelector(s),AL="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+let S={};try{S=JSON.parse(localStorage.getItem("mdh")||"{}")}catch(e){}
+const save=()=>{try{localStorage.setItem("mdh",JSON.stringify(S))}catch(e){}};
+let hist=S.hist||[],timer=null;
+const num=(id,d)=>{const v=$(id).value;return v===""?d:+v};
+const say=(t,c)=>{$("#msg").className=c||"";$("#msg").textContent=t};
+function copy(t){
+  if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(t);return}
+  const a=document.createElement("textarea");a.value=t;a.style.cssText="position:fixed;opacity:0";
+  document.body.appendChild(a);a.select();try{document.execCommand("copy")}catch(e){}a.remove();
+}
+function gen(n,h,p){
+  const now=Math.floor(Date.now()/1000),out=[];
+  for(let i=0;i<n;i++){
+    const b=new Uint8Array(12);crypto.getRandomValues(b);
+    out.push({k:p+"-"+[...b].map(x=>AL[x%32]).join(""),exp:h>0?now+Math.round(h*3600):0});
+  }
+  return out;
+}
+const line=e=>e.exp?`{"${e.k}", ${e.exp}},`:`"${e.k}",`;
+function renderLua(){
+  const now=Date.now()/1000;
+  hist=hist.filter(e=>!e.exp||e.exp>now);
+  $("#lua").value=hist.map(line).join("\n");
+}
+async function sendHook(url,list,h,note){
+  const exp=h>0?`<t:${Math.floor(Date.now()/1000+h*3600)}:R>`:"vĩnh viễn";
+  const f=[{name:"Hết hạn",value:exp,inline:true}];
+  if(note)f.push({name:"Ghi chú",value:note,inline:true});
+  const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+    username:"MeoDogHub Key",allowed_mentions:{parse:[]},
+    embeds:[{title:list.length>1?"🔑 "+list.length+" key mới":"🔑 Key mới",color:0x7c5aff,
+      description:list.map(e=>"`"+e.k+"`").join("\n"),fields:f}]})});
+  if(!r.ok)throw new Error("Webhook trả về "+r.status);
+}
+async function make(){
+  const n=Math.max(1,Math.min(50,num("#count",1))),h=Math.max(0,num("#hours",24));
+  const p=$("#prefix").value.trim()||"MeoDogHub",url=$("#hook").value.trim(),note=$("#note").value.trim();
+  const list=gen(n,h,p);
+  hist=[...list,...hist].slice(0,200);
+  S={...S,hist,hook:url,count:n,hours:h,prefix:p,note,send:$("#send").checked,every:num("#every",24),auto:$("#auto").checked};save();
+  const box=$("#keys");box.textContent="";
+  list.forEach(e=>{const d=document.createElement("div");d.className="key";d.textContent=e.k;
+    d.onclick=()=>{copy(e.k);say("Đã copy","ok")};box.appendChild(d)});
+  $("#res").hidden=false;renderLua();
+  if($("#send").checked&&url){
+    try{await sendHook(url,list,h,note);say("Đã tạo và gửi webhook","ok")}
+    catch(e){say("Tạo xong nhưng gửi webhook lỗi: "+e.message,"err")}
+  }else say("Đã tạo","ok");
+}
+function arm(){
+  clearInterval(timer);
+  if($("#auto").checked){timer=setInterval(make,Math.max(1,num("#every",24))*3600e3);say("Tự tạo đang bật, giữ tab này mở","ok")}
+}
+$("#go").onclick=make;
+$("#auto").onchange=()=>{make();arm()};
+$("#copyLua").onclick=()=>{copy($("#lua").value);say("Đã copy dòng Lua","ok")};
+$("#clear").onclick=()=>{if(confirm("Xoá lịch sử key trong trình duyệt?")){hist=[];S.hist=[];save();renderLua();$("#res").hidden=true}};
+for(const [id,k] of [["#count","count"],["#hours","hours"],["#prefix","prefix"],["#hook","hook"],["#note","note"],["#every","every"]])if(S[k]!==undefined)$(id).value=S[k];
+if(S.send===false)$("#send").checked=false;
+renderLua();
+if(S.auto){$("#auto").checked=true;arm()}
+</script></body></html>
